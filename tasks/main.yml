@@ -5,34 +5,39 @@
     name: prometheus-community
     repo_url: https://prometheus-community.github.io/helm-charts
 
+- name: Prepare a lists of hosts defined by groups
+  set_fact:
+    targets_os_hosts: "{{ [] if groups['monitor-os'] is undefined else groups['monitor-os'] if groups['monitor-os']|length > 0 else groups['all'] }}"
+    targets_icmp_hosts: "{{ [] if groups['monitor-icmp'] is undefined else groups['monitor-icmp'] if groups['monitor-icmp']|length > 0 else groups['all'] }}"
+
 - name: Create a list of targets with node-exporter
   set_fact:
-    targets_os:
-      targets: [ '{{ hostvars[item]["ansible_host"] }}:9100' ]
-      labels:
-        instance: '{{ hostvars[item]["global_sandbox_name"] }}-{{ hostvars[item]["inventory_hostname"] }}'
-        sandbox: '{{ hostvars[item]["global_sandbox_name"] }}'
-  loop: "{{ [] if groups['monitor-os'] is undefined else groups['monitor-os'] if groups['monitor-os']|length > 0 else groups['all'] }}"
-  register: target_list_os
+    targets_os: |
+      {% for item in targets_os_hosts %}
+      - targets: [ '{{ hostvars[item]["ansible_host"] }}:9100' ]
+        labels:
+          instance: '{{ hostvars[item]["global_sandbox_name"] }}-{{ hostvars[item]["inventory_hostname"] }}'
+          sandbox: '{{ hostvars[item]["global_sandbox_name"] }}'
+      {% endfor %}
 
 # --- ICMP targets ---
+
+- name: Create a list of targets for icmp monitoring (ansible_host)
+  set_fact:
+    targets_icmp_ansible_host: |
+      {% for item in targets_icmp_hosts %}
+      - targets: [ '{{ hostvars[item]["ansible_host"] }}' ]
+        labels:
+          instance: '{{ hostvars[item]["global_sandbox_name"] }}-{{ hostvars[item]["inventory_hostname"] }}'
+          sandbox: '{{ hostvars[item]["global_sandbox_name"] }}'
+          target: '{{ hostvars[item]["ansible_host"] }}'
+      {% endfor %}
 
 - name: Parse monitored_hosts_icmp group
   set_fact:
     monitored_icmp_targets: "{{ hostvars[item]['targets'] }}"
   loop: "{{ groups['monitored_hosts_icmp'] | default([]) }}"
   register: monitored_icmp_list
-
-- name: Create a list of targets for icmp monitoring (ansible_host)
-  set_fact:
-    targets_icmp:
-      targets: [ '{{ hostvars[item]["ansible_host"] }}' ]
-      labels:
-        instance: '{{ hostvars[item]["global_sandbox_name"] }}-{{ hostvars[item]["inventory_hostname"] }}'
-        sandbox: '{{ hostvars[item]["global_sandbox_name"] }}'
-        target: '{{ hostvars[item]["ansible_host"] }}'
-  loop: "{{ [] if groups['monitor-icmp'] is undefined else groups['monitor-icmp'] if groups['monitor-icmp']|length > 0 else groups['all'] }}"
-  register: target_list_icmp_ansible_host
 
 - name: Create a list of targets for icmp monitoring (interface)
   set_fact:
@@ -138,11 +143,11 @@
         params:
           module: [ icmp ]
         static_configs: "{{ (
-            target_list_icmp_ansible_host.results | default([]) +
             target_list_icmp_interface.results | default([]) +
             target_list_icmp_address_direct.results | default([]) +
             target_list_icmp_address_cidr.results | default([])
-          ) | map(attribute='ansible_facts.targets_icmp') | list }}"
+          ) | map(attribute='ansible_facts.targets_icmp') | list +
+          targets_icmp_ansible_host | from_yaml | default([]) }}"
         relabel_configs:
           - source_labels: [ __address__ ]
             target_label: __param_target
