@@ -14,10 +14,10 @@
   set_fact:
     targets_os: |
       {% for item in targets_os_hosts %}
-      - targets: [ '{{ hostvars[item]["ansible_host"] }}:9100' ]
+      - targets: [ '{{ hostvars[item].ansible_host }}:9100' ]
         labels:
-          instance: '{{ hostvars[item]["global_sandbox_name"] }}-{{ hostvars[item]["inventory_hostname"] }}'
-          sandbox: '{{ hostvars[item]["global_sandbox_name"] }}'
+          instance: '{{ global_sandbox_name }}-{{ hostvars[item].inventory_hostname }}'
+          sandbox: '{{ global_sandbox_name }}'
       {% endfor %}
 
 # --- ICMP targets ---
@@ -26,92 +26,62 @@
   set_fact:
     targets_icmp_ansible_host: |
       {% for item in targets_icmp_hosts %}
-      - targets: [ '{{ hostvars[item]["ansible_host"] }}' ]
+      - targets: [ '{{ hostvars[item].ansible_host }}' ]
         labels:
-          instance: '{{ hostvars[item]["global_sandbox_name"] }}-{{ hostvars[item]["inventory_hostname"] }}'
-          sandbox: '{{ hostvars[item]["global_sandbox_name"] }}'
-          target: '{{ hostvars[item]["ansible_host"] }}'
+          instance: '{{ global_sandbox_name }}-{{ hostvars[item].inventory_hostname }}'
+          sandbox: '{{ global_sandbox_name }}'
+          target: '{{ hostvars[item].ansible_host }}'
       {% endfor %}
 
 - name: Parse monitored_hosts_icmp group
   set_fact:
-    monitored_icmp_targets: "{{ hostvars[item]['targets'] }}"
-  loop: "{{ groups['monitored_hosts_icmp'] | default([]) }}"
-  register: monitored_icmp_list
+    monitored_icmp_targets: |
+      {% for item in groups['monitored_hosts_icmp'] | default([]) %}
+      - host: "{{ item }}"
+        targets: {{ hostvars[item].targets }}
+        interfaces: {{ hostvars[item].ansible_interfaces | map('regex_replace', '^', 'ansible_') | map('extract', hostvars[item]) | selectattr('ipv4.address', 'defined') }}
+      {% endfor %}
 
-- name: Create a list of targets for icmp monitoring (interface)
+- name: Create a list of targets for icmp monitoring
   set_fact:
-    targets_icmp:
-      targets: [ "{{ hostvars[item[0]['item']]['ansible_facts'][item[1]['interface']].ipv4.address | default(hostvars[item[0]['item']]['ansible_facts'][item[1]['interface']].ipv4[0].address) }}" ]
-      labels:
-        instance: '{{ hostvars[item[0]["item"]]["global_sandbox_name"] }}-{{ hostvars[item[0]["item"]]["inventory_hostname"] }}'
-        sandbox: '{{ hostvars[item[0]["item"]]["global_sandbox_name"] }}'
-        target: "{{ hostvars[item[0]['item']]['ansible_facts'][item[1]['interface']].ipv4.address | default(hostvars[item[0]['item']]['ansible_facts'][item[1]['interface']].ipv4[0].address) }}"
-  loop: "{{ monitored_icmp_list.results | default([]) | subelements('ansible_facts.monitored_icmp_targets', skip_missing=True) | selectattr('1.interface', 'defined') | list }}"
-  register: target_list_icmp_interface
-
-- name: Create a list of targets for icmp monitoring (address /32 or FQDN)
-  set_fact:
-    targets_icmp:
-      targets: [ "{{ item[1]['address'] | regex_replace('/32$', '') }}" ]
-      labels:
-        instance: '{{ hostvars[item[0]["item"]]["global_sandbox_name"] }}-{{ hostvars[item[0]["item"]]["inventory_hostname"] }}'
-        sandbox: '{{ hostvars[item[0]["item"]]["global_sandbox_name"] }}'
-        target: "{{ item[1]['address'] | regex_replace('/32$', '') }}"
-  loop: "{{ monitored_icmp_list.results | default([]) | subelements('ansible_facts.monitored_icmp_targets', skip_missing=True) | selectattr('1.address', 'defined') | selectattr('1.address', 'match', '^[^/]+(\/32)?$') | list }}"
-  register: target_list_icmp_address_direct
-
-- name: Create a list of targets for icmp monitoring (CIDR subnet)
-  set_fact:
-    targets_icmp:
-      targets: [ "{{ hostvars[item[0]['item']]['ansible_facts'] | dict2items | selectattr('value.ipv4', 'defined') | map(attribute='value.ipv4') | flatten | select('mapping') | selectattr('address', 'ansible.utils.in_network', item[1]['address']) | map(attribute='address') | first }}" ]
-      labels:
-        instance: '{{ hostvars[item[0]["item"]]["global_sandbox_name"] }}-{{ hostvars[item[0]["item"]]["inventory_hostname"] }}'
-        sandbox: '{{ hostvars[item[0]["item"]]["global_sandbox_name"] }}'
-        target: "{{ hostvars[item[0]['item']]['ansible_facts'] | dict2items | selectattr('value.ipv4', 'defined') | map(attribute='value.ipv4') | flatten | select('mapping') | selectattr('address', 'ansible.utils.in_network', item[1]['address']) | map(attribute='address') | first }}"
-  loop: "{{ monitored_icmp_list.results | default([]) | subelements('ansible_facts.monitored_icmp_targets', skip_missing=True) | selectattr('1.address', 'defined') | rejectattr('1.address', 'match', '^[^/]+(\/32)?$') | list }}"
-  register: target_list_icmp_address_cidr
+    targets_icmp: |
+      {% for item in monitored_icmp_targets | from_yaml | subelements('targets', skip_missing=True) %}
+      {% set target = hostvars[item.0.host].ansible_facts[item.1.interface].ipv4.address | default(hostvars[item.0.host].ansible_facts[item.1.interface].ipv4.0.address)
+        if item.1.interface is defined else
+        item.0.interfaces | selectattr('ipv4.address', 'ansible.utils.in_network', item.1.address) | map(attribute='ipv4.address') | first
+      %}
+      - targets: [ "{{ target }}" ]
+        labels:
+          instance: '{{ global_sandbox_name }}-{{ hostvars[item.0.host].inventory_hostname }}'
+          sandbox: '{{ global_sandbox_name }}'
+          target: "{{ target }}"
+      {% endfor %}
 
 # --- TCP targets ---
 
 - name: Parse monitored_hosts_tcp group
   set_fact:
-    monitored_tcp_targets: "{{ hostvars[item]['targets'] }}"
-  loop: "{{ groups['monitored_hosts_tcp'] | default([]) }}"
-  register: monitored_tcp_list
+    monitored_tcp_targets: |
+      {% for item in groups['monitored_hosts_tcp'] | default([]) %}
+      - host: "{{ item }}"
+        targets: {{ hostvars[item].targets }}
+        interfaces: {{ hostvars[item].ansible_interfaces | map('regex_replace', '^', 'ansible_') | map('extract', hostvars[item]) | selectattr('ipv4.address', 'defined') }}
+      {% endfor %}
 
-- name: Create a list of targets for tcp monitoring (interface)
+- name: Create a list of targets for tcp monitoring
   set_fact:
-    targets_tcp:
-      targets: [ "{{ hostvars[item[0]['item']]['ansible_facts'][item[1]['interface']].ipv4.address | default(hostvars[item[0]['item']]['ansible_facts'][item[1]['interface']].ipv4[0].address) }}:{{ item[1]['port'] }}" ]
-      labels:
-        instance: '{{ hostvars[item[0]["item"]]["global_sandbox_name"] }}-{{ hostvars[item[0]["item"]]["inventory_hostname"] }}'
-        sandbox: '{{ hostvars[item[0]["item"]]["global_sandbox_name"] }}'
-        target: "{{ hostvars[item[0]['item']]['ansible_facts'][item[1]['interface']].ipv4.address | default(hostvars[item[0]['item']]['ansible_facts'][item[1]['interface']].ipv4[0].address) }}:{{ item[1]['port'] }}"
-  loop: "{{ monitored_tcp_list.results | default([]) | subelements('ansible_facts.monitored_tcp_targets', skip_missing=True) | selectattr('1.interface', 'defined') | list }}"
-  register: target_list_tcp_interface
-
-- name: Create a list of targets for tcp monitoring (address /32 or FQDN)
-  set_fact:
-    targets_tcp:
-      targets: [ "{{ item[1]['address'] | regex_replace('/32$', '') }}:{{ item[1]['port'] }}" ]
-      labels:
-        instance: '{{ hostvars[item[0]["item"]]["global_sandbox_name"] }}-{{ hostvars[item[0]["item"]]["inventory_hostname"] }}'
-        sandbox: '{{ hostvars[item[0]["item"]]["global_sandbox_name"] }}'
-        target: "{{ item[1]['address'] | regex_replace('/32$', '') }}:{{ item[1]['port'] }}"
-  loop: "{{ monitored_tcp_list.results | default([]) | subelements('ansible_facts.monitored_tcp_targets', skip_missing=True) | selectattr('1.address', 'defined') | selectattr('1.address', 'match', '^[^/]+(\/32)?$') | list }}"
-  register: target_list_tcp_address_direct
-
-- name: Create a list of targets for tcp monitoring (CIDR subnet)
-  set_fact:
-    targets_tcp:
-      targets: [ "{{ hostvars[item[0]['item']]['ansible_facts'] | dict2items | selectattr('value.ipv4', 'defined') | map(attribute='value.ipv4') | flatten | select('mapping') | selectattr('address', 'ansible.utils.in_network', item[1]['address']) | map(attribute='address') | first }}:{{ item[1]['port'] }}" ]
-      labels:
-        instance: '{{ hostvars[item[0]["item"]]["global_sandbox_name"] }}-{{ hostvars[item[0]["item"]]["inventory_hostname"] }}'
-        sandbox: '{{ hostvars[item[0]["item"]]["global_sandbox_name"] }}'
-        target: "{{ hostvars[item[0]['item']]['ansible_facts'] | dict2items | selectattr('value.ipv4', 'defined') | map(attribute='value.ipv4') | flatten | select('mapping') | selectattr('address', 'ansible.utils.in_network', item[1]['address']) | map(attribute='address') | first }}:{{ item[1]['port'] }}"
-  loop: "{{ monitored_tcp_list.results | default([]) | subelements('ansible_facts.monitored_tcp_targets', skip_missing=True) | selectattr('1.address', 'defined') | rejectattr('1.address', 'match', '^[^/]+(\/32)?$') | list }}"
-  register: target_list_tcp_address_cidr
+    targets_tcp: |
+      {% for item in monitored_tcp_targets | from_yaml | subelements('targets', skip_missing=True) %}
+      {% set target = hostvars[item.0.host].ansible_facts[item.1.interface].ipv4.address | default(hostvars[item.0.host].ansible_facts[item.1.interface].ipv4.0.address)
+        if item.1.interface is defined else
+        item.0.interfaces | selectattr('ipv4.address', 'ansible.utils.in_network', item.1.address) | map(attribute='ipv4.address') | first
+      %}
+      - targets: [ "{{ target }}:{{ item.1.port }}" ]
+        labels:
+          instance: '{{ global_sandbox_name }}-{{ hostvars[item.0.host].inventory_hostname }}'
+          sandbox: '{{ global_sandbox_name }}'
+          target: "{{ target }}:{{ item.1.port }}"
+      {% endfor %}
 
 # --- HTTP targets ---
 
@@ -119,9 +89,9 @@
   set_fact:
     targets_http: |
       {% for item in monitoring_http_targets | default([]) %}
-      - targets: [ "{{ item['url'] }}" ]
+      - targets: [ "{{ item.url }}" ]
         labels:
-          instance: "{{ item['url'] }}"
+          instance: "{{ item.url }}"
           sandbox: "{{ global_sandbox_name }}"
           __param_module: "{{ 'http_2xx_check_' + (item.check_string | hash('md5')) if item.check_string is defined else 'http_2xx' }}"
       {% endfor %}
@@ -133,7 +103,7 @@
     scrapeConfigs:
       - job_name: "sandbox-{{ global_sandbox_allocation_unit_id }}"
         metrics_path: "/metrics"
-        static_configs: "{{ target_list_os.results | map(attribute='ansible_facts.targets_os') | list }}"
+        static_configs: "{{ targets_os | from_yaml | default([]) }}"
         relabel_configs: "{{ custom_os_relabel_configs }}"
         metric_relabel_configs: "{{ custom_os_metric_relabel_configs }}"
       - job_name: "blackbox-icmp-sandbox-{{ global_sandbox_allocation_unit_id }}"
@@ -142,12 +112,8 @@
         scrape_interval: "15s"
         params:
           module: [ icmp ]
-        static_configs: "{{ (
-            target_list_icmp_interface.results | default([]) +
-            target_list_icmp_address_direct.results | default([]) +
-            target_list_icmp_address_cidr.results | default([])
-          ) | map(attribute='ansible_facts.targets_icmp') | list +
-          targets_icmp_ansible_host | from_yaml | default([]) }}"
+        static_configs: "{{ targets_icmp_ansible_host | from_yaml | default([])
+                          + targets_icmp | from_yaml | default([]) }}"
         relabel_configs:
           - source_labels: [ __address__ ]
             target_label: __param_target
@@ -159,11 +125,7 @@
         scrape_interval: "15s"
         params:
           module: [ tcp ]
-        static_configs: "{{ (
-            target_list_tcp_interface.results | default([]) +
-            target_list_tcp_address_direct.results | default([]) +
-            target_list_tcp_address_cidr.results | default([])
-          ) | map(attribute='ansible_facts.targets_tcp') | list }}"
+        static_configs: "{{ targets_tcp | from_yaml | default([]) }}"
         relabel_configs:
           - source_labels: [ __address__ ]
             target_label: __param_target
