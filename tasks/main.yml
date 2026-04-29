@@ -7,8 +7,8 @@
 
 - name: Prepare a lists of hosts defined by groups
   set_fact:
-    targets_os_hosts: "{{ [] if groups['monitor-os'] is undefined else groups['monitor-os'] if groups['monitor-os']|length > 0 else groups['all'] }}"
-    targets_icmp_hosts: "{{ [] if groups['monitor-icmp'] is undefined else groups['monitor-icmp'] if groups['monitor-icmp']|length > 0 else groups['all'] }}"
+    targets_os_hosts: "{{ [] if groups['monitor-os'] is undefined else groups['monitor-os'] if groups['monitor-os']|length > 0 else groups['all']|difference(['proxy-jump']) }}"
+    targets_icmp_hosts: "{{ [] if groups['monitor-icmp'] is undefined else groups['monitor-icmp'] if groups['monitor-icmp']|length > 0 else groups['all']|difference(['proxy-jump']) }}"
 
 - name: Create a list of targets with node-exporter
   set_fact:
@@ -16,7 +16,7 @@
       {% for item in targets_os_hosts %}
       - targets: [ '{{ hostvars[item].ansible_host }}:9100' ]
         labels:
-          instance: '{{ global_sandbox_name }}-{{ hostvars[item].inventory_hostname }}'
+          instance: '{{ global_sandbox_name }}-{{ item }}'
           sandbox: '{{ global_sandbox_name }}'
       {% endfor %}
 
@@ -28,7 +28,7 @@
       {% for item in targets_icmp_hosts %}
       - targets: [ '{{ hostvars[item].ansible_host }}' ]
         labels:
-          instance: '{{ global_sandbox_name }}-{{ hostvars[item].inventory_hostname }}'
+          instance: '{{ global_sandbox_name }}-{{ item }}'
           sandbox: '{{ global_sandbox_name }}'
           target: '{{ hostvars[item].ansible_host }}'
       {% endfor %}
@@ -52,7 +52,7 @@
       %}
       - targets: [ "{{ target }}" ]
         labels:
-          instance: '{{ global_sandbox_name }}-{{ hostvars[item.0.host].inventory_hostname }}'
+          instance: '{{ global_sandbox_name }}-{{ item.0.host }}'
           sandbox: '{{ global_sandbox_name }}'
           target: "{{ target }}"
       {% endfor %}
@@ -78,7 +78,7 @@
       %}
       - targets: [ "{{ target }}:{{ item.1.port }}" ]
         labels:
-          instance: '{{ global_sandbox_name }}-{{ hostvars[item.0.host].inventory_hostname }}'
+          instance: '{{ global_sandbox_name }}-{{ item.0.host }}'
           sandbox: '{{ global_sandbox_name }}'
           target: "{{ target }}:{{ item.1.port }}"
       {% endfor %}
@@ -103,7 +103,7 @@
     scrapeConfigs:
       - job_name: "sandbox-{{ global_sandbox_allocation_unit_id }}"
         metrics_path: "/metrics"
-        static_configs: "{{ targets_os | from_yaml | default([]) }}"
+        static_configs: "{{ targets_os | from_yaml | default([], true) }}"
         relabel_configs: "{{ custom_os_relabel_configs }}"
         metric_relabel_configs: "{{ custom_os_metric_relabel_configs }}"
       - job_name: "blackbox-icmp-sandbox-{{ global_sandbox_allocation_unit_id }}"
@@ -112,8 +112,8 @@
         scrape_interval: "15s"
         params:
           module: [ icmp ]
-        static_configs: "{{ targets_icmp_ansible_host | from_yaml | default([])
-                          + targets_icmp | from_yaml | default([]) }}"
+        static_configs: "{{ (targets_icmp_ansible_host | from_yaml | default([], true)
+                          + targets_icmp | from_yaml | default([], true)) | unique }}"
         relabel_configs:
           - source_labels: [ __address__ ]
             target_label: __param_target
@@ -125,7 +125,7 @@
         scrape_interval: "15s"
         params:
           module: [ tcp ]
-        static_configs: "{{ targets_tcp | from_yaml | default([]) }}"
+        static_configs: "{{ targets_tcp | from_yaml | default([], true) | unique }}"
         relabel_configs:
           - source_labels: [ __address__ ]
             target_label: __param_target
@@ -135,7 +135,7 @@
         metrics_path: "/probe"
         scrape_timeout: "15s"
         scrape_interval: "15s"
-        static_configs: "{{ targets_http | from_yaml | default([]) }}"
+        static_configs: "{{ targets_http | from_yaml | default([], true) }}"
         relabel_configs:
           - source_labels: [ __address__ ]
             target_label: __param_target
