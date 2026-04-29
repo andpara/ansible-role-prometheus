@@ -117,14 +117,14 @@
 
 - name: Create a list of targets for http monitoring
   set_fact:
-    targets_http:
-      targets: [ "{{ item['url'] }}" ]
-      labels:
-        instance: "{{ item['url'] }}"
-        sandbox: "{{ global_sandbox_name }}"
-        __param_module: "{{ 'http_2xx_check_' + (item.check_string | hash('md5')) if item.check_string is defined else 'http_2xx' }}"
-  loop: "{{ monitoring_http_targets | default([]) }}"
-  register: target_list_http
+    targets_http: |
+      {% for item in monitoring_http_targets | default([]) %}
+      - targets: [ "{{ item['url'] }}" ]
+        labels:
+          instance: "{{ item['url'] }}"
+          sandbox: "{{ global_sandbox_name }}"
+          __param_module: "{{ 'http_2xx_check_' + (item.check_string | hash('md5')) if item.check_string is defined else 'http_2xx' }}"
+      {% endfor %}
 
 # --- Build scrape configs ---
 
@@ -173,7 +173,7 @@
         metrics_path: "/probe"
         scrape_timeout: "15s"
         scrape_interval: "15s"
-        static_configs: "{{ target_list_http.results | default([]) | map(attribute='ansible_facts.targets_http') | list }}"
+        static_configs: "{{ targets_http | from_yaml | default([]) }}"
         relabel_configs:
           - source_labels: [ __address__ ]
             target_label: __param_target
