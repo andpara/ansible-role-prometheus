@@ -5,49 +5,107 @@
     name: prometheus-community
     repo_url: https://prometheus-community.github.io/helm-charts
 
+- name: Prepare a lists of hosts defined by ansible groups in topology.yaml
+  set_fact:
+    monitored_hosts_os_list: "{{ [] if groups['monitor-os'] is undefined else groups['monitor-os'] if groups['monitor-os']|length > 0 else groups['all']|difference(['proxy-jump']) }}"
+    monitored_hosts_icmp_management_list: "{{ [] if groups['monitor-icmp'] is undefined else groups['monitor-icmp'] if groups['monitor-icmp']|length > 0 else groups['all']|difference(['proxy-jump']) }}"
+
+# --- node-exporter targets ---
+
 - name: Create a list of targets with node-exporter
   set_fact:
-    targets_os:
-      targets: [ '{{ hostvars[item]["ansible_host"] }}:9100' ]
-      labels:
-        instance: '{{ hostvars[item]["global_sandbox_name"] }}-{{ hostvars[item]["inventory_hostname"] }}'
-        sandbox: '{{ hostvars[item]["global_sandbox_name"] }}'
-  loop: "{{ [] if groups['monitor-os'] is undefined else groups['monitor-os'] if groups['monitor-os']|length > 0 else groups['all'] }}"
-  register: target_list_os
+    targets_os: |
+      {% for item in monitored_hosts_os_list %}
+      - targets: [ '{{ hostvars[item].ansible_host }}:9100' ]
+        labels:
+          instance: '{{ global_sandbox_name }}-{{ item }}'
+          sandbox: '{{ global_sandbox_name }}'
+      {% endfor %}
+
+# --- ICMP targets ---
+
+- name: Create a list of targets for icmp monitoring of management interfaces
+  set_fact:
+    targets_icmp_management: |
+      {% for item in monitored_hosts_icmp_management_list %}
+      - targets: [ '{{ hostvars[item].ansible_host }}' ]
+        labels:
+          instance: '{{ global_sandbox_name }}-{{ item }}'
+          sandbox: '{{ global_sandbox_name }}'
+          target: '{{ hostvars[item].ansible_host }}'
+      {% endfor %}
+
+- name: Parse monitoring_targets.icmp from topology.yaml
+  set_fact:
+    monitored_hosts_icmp_list: |
+      {% for item in groups['monitored_hosts_icmp'] | default([]) %}
+      - host: "{{ item }}"
+        targets: {{ hostvars[item].icmp_targets }}
+        interfaces: {{ hostvars[item].ansible_interfaces | map('regex_replace', '^', 'ansible_') | map('extract', hostvars[item]) | selectattr('ipv4.address', 'defined') }}
+      {% endfor %}
 
 - name: Create a list of targets for icmp monitoring
   set_fact:
-    targets_icmp:
-      targets: [ '{{ hostvars[item]["ansible_host"] }}' ]
-      labels:
-        instance: '{{ hostvars[item]["global_sandbox_name"] }}-{{ hostvars[item]["inventory_hostname"] }}'
-        sandbox: '{{ hostvars[item]["global_sandbox_name"] }}'
-  loop: "{{ [] if groups['monitor-icmp'] is undefined else groups['monitor-icmp'] if groups['monitor-icmp']|length>0 else groups['all'] }}"
-  register: target_list_icmp
+    targets_icmp: |
+      {% for item in monitored_hosts_icmp_list | from_yaml | subelements('targets', skip_missing=True) %}
+      {% set target = hostvars[item.0.host].ansible_facts[item.1.interface].ipv4.address | default(hostvars[item.0.host].ansible_facts[item.1.interface].ipv4.0.address)
+        if item.1.interface is defined else
+        item.0.interfaces | selectattr('ipv4.address', 'ansible.utils.in_network', item.1.address) | map(attribute='ipv4.address') | first
+      %}
+      - targets: [ "{{ target }}" ]
+        labels:
+          instance: '{{ global_sandbox_name }}-{{ item.0.host }}'
+          sandbox: '{{ global_sandbox_name }}'
+          target: "{{ target }}"
+      {% endfor %}
 
-- name: Parse monitored_hosts group for TCP targets
-  set_fact:
-    monitored_interfaces: "{{ hostvars[item]['targets'] }}"
-  loop: "{{ groups['monitored_hosts'] }}"
-  register: monitored_interfaces_list
-  when: groups['monitored_hosts'] is defined
+# --- TCP targets ---
 
-- name: Create a list of targets for tcp monitoring from monitored_interfaces_list fact
+- name: Parse monitoring_targets.tcp from topology.yaml
   set_fact:
-    targets_tcp:
-      targets: [ "{{ hostvars[item[0]['item']]['ansible_facts'][item[1]['interface']].ipv4.address | default(hostvars[item[0]['item']]['ansible_facts'][item[1]['interface']].ipv4[0].address) }}:{{ item[1]['port'] }}" ]
-      labels:
-        instance: '{{ hostvars[item[0]["item"]]["global_sandbox_name"] }}-{{ hostvars[item[0]["item"]]["inventory_hostname"] }}:{{ item[1]["port"] }}'
-        sandbox: '{{ hostvars[item[0]["item"]]["global_sandbox_name"] }}'
-  loop: "{{ monitored_interfaces_list.results | default({}) | subelements('ansible_facts.monitored_interfaces', skip_missing=True) }}"
-  register: target_list_tcp
+    monitored_hosts_tcp_list: |
+      {% for item in groups['monitored_hosts_tcp'] | default([]) %}
+      - host: "{{ item }}"
+        targets: {{ hostvars[item].tcp_targets }}
+        interfaces: {{ hostvars[item].ansible_interfaces | map('regex_replace', '^', 'ansible_') | map('extract', hostvars[item]) | selectattr('ipv4.address', 'defined') }}
+      {% endfor %}
+
+- name: Create a list of targets for tcp monitoring
+  set_fact:
+    targets_tcp: |
+      {% for item in monitored_hosts_tcp_list | from_yaml | subelements('targets', skip_missing=True) %}
+      {% set target = hostvars[item.0.host].ansible_facts[item.1.interface].ipv4.address | default(hostvars[item.0.host].ansible_facts[item.1.interface].ipv4.0.address)
+        if item.1.interface is defined else
+        item.0.interfaces | selectattr('ipv4.address', 'ansible.utils.in_network', item.1.address) | map(attribute='ipv4.address') | first
+      %}
+      - targets: [ "{{ target }}:{{ item.1.port }}" ]
+        labels:
+          instance: '{{ global_sandbox_name }}-{{ item.0.host }}'
+          sandbox: '{{ global_sandbox_name }}'
+          target: "{{ target }}:{{ item.1.port }}"
+      {% endfor %}
+
+# --- HTTP targets ---
+
+- name: Create a list of targets for http monitoring
+  set_fact:
+    targets_http: |
+      {% for item in monitoring_http_targets | default([]) %}
+      - targets: [ "{{ item.url }}" ]
+        labels:
+          instance: "{{ item.url }}"
+          sandbox: "{{ global_sandbox_name }}"
+          __param_module: "{{ 'http_2xx_check_' + (item.check_string | hash('md5')) if item.check_string is defined else 'http_2xx' }}"
+      {% endfor %}
+
+# --- Build scrape configs ---
 
 - name: Create scrapeConfigs
   set_fact:
     scrapeConfigs:
       - job_name: "sandbox-{{ global_sandbox_allocation_unit_id }}"
         metrics_path: "/metrics"
-        static_configs: "{{ target_list_os.results | map(attribute='ansible_facts.targets_os') | list }}"
+        static_configs: "{{ targets_os | from_yaml | default([], true) }}"
         relabel_configs: "{{ custom_os_relabel_configs }}"
         metric_relabel_configs: "{{ custom_os_metric_relabel_configs }}"
       - job_name: "blackbox-icmp-sandbox-{{ global_sandbox_allocation_unit_id }}"
@@ -56,7 +114,8 @@
         scrape_interval: "15s"
         params:
           module: [ icmp ]
-        static_configs: "{{ target_list_icmp.results | default('') | map(attribute='ansible_facts.targets_icmp') | list }}"
+        static_configs: "{{ (targets_icmp_management | from_yaml | default([], true)
+                          + targets_icmp | from_yaml | default([], true)) | unique }}"
         relabel_configs:
           - source_labels: [ __address__ ]
             target_label: __param_target
@@ -68,10 +127,22 @@
         scrape_interval: "15s"
         params:
           module: [ tcp ]
-        static_configs: "{{ target_list_tcp.results | default('') | map(attribute='ansible_facts.targets_tcp') | list }}"
+        static_configs: "{{ targets_tcp | from_yaml | default([], true) | unique }}"
         relabel_configs:
           - source_labels: [ __address__ ]
             target_label: __param_target
+          - target_label: __address__
+            replacement: prometheus-blackbox-exporter:9115
+      - job_name: "blackbox-http-sandbox-{{ global_sandbox_allocation_unit_id }}"
+        metrics_path: "/probe"
+        scrape_timeout: "15s"
+        scrape_interval: "15s"
+        static_configs: "{{ targets_http | from_yaml | default([], true) }}"
+        relabel_configs:
+          - source_labels: [ __address__ ]
+            target_label: __param_target
+          - source_labels: [ __param_module ]
+            target_label: __param_module
           - target_label: __address__
             replacement: prometheus-blackbox-exporter:9115
 
@@ -101,7 +172,6 @@
         prometheusSpec:
           maximumStartupDurationSeconds: 600
           additionalScrapeConfigs: "{{ additionalScrapeConfigs }}"
-
   register: result
   retries: 5
   delay: 10
