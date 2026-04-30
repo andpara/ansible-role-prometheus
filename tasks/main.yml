@@ -40,7 +40,7 @@
     monitored_hosts_icmp_list: |
       {% for item in groups['monitored_hosts_icmp'] | default([]) %}
       - host: "{{ item }}"
-        targets: {{ hostvars[item].targets }}
+        targets: {{ hostvars[item].icmp_targets }}
         interfaces: {{ hostvars[item].ansible_interfaces | map('regex_replace', '^', 'ansible_') | map('extract', hostvars[item]) | selectattr('ipv4.address', 'defined') }}
       {% endfor %}
 
@@ -66,7 +66,7 @@
     monitored_hosts_tcp_list: |
       {% for item in groups['monitored_hosts_tcp'] | default([]) %}
       - host: "{{ item }}"
-        targets: {{ hostvars[item].targets }}
+        targets: {{ hostvars[item].tcp_targets }}
         interfaces: {{ hostvars[item].ansible_interfaces | map('regex_replace', '^', 'ansible_') | map('extract', hostvars[item]) | selectattr('ipv4.address', 'defined') }}
       {% endfor %}
 
