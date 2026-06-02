@@ -51,6 +51,25 @@
       - "Xubuntu Desktop Hostvars: {{ hostvars['xubuntu-desktop'].icmp_targets | default('NOT_DEFINED') }}"
       - "Router Hostvars: {{ hostvars['router'].icmp_targets | default('NOT_DEFINED') }}"
 
+- name: "DETAILED DEBUG: Audit Monitoring Targets"
+  ansible.builtin.debug:
+    msg:
+      - "=== ANSIBLE GROUPS AVALIABLE ==="
+      - "{{ groups.keys() | list }}"
+      
+      - "=== MONITOR-ICMP GROUP MEMBERS ==="
+      - "{{ groups['monitor-icmp'] | default('GROUP_NOT_FOUND') }}"
+
+      - "=== MONITORED_HOSTS_ICMP GROUP MEMBERS ==="
+      - "{{ groups['monitored_hosts_icmp'] | default('GROUP_NOT_FOUND') }}"
+
+      - "=== XUBUNTU-DESKTOP FULL VARIABLES ==="
+      - "{{ hostvars['xubuntu-desktop'] | dict2items | selectattr('key', 'match', '.*monitor.*|.*icmp.*|.*target.*') | list }}"
+
+      - "=== ROUTER FULL VARIABLES ==="
+      - "{{ hostvars['router'] | dict2items | selectattr('key', 'match', '.*monitor.*|.*icmp.*|.*target.*') | list }}"
+
+
 
 - name: Create a list of targets for icmp monitoring
   set_fact:
