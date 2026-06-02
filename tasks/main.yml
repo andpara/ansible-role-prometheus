@@ -44,6 +44,14 @@
         interfaces: {{ hostvars[item].ansible_interfaces | map('regex_replace', '^', 'ansible_') | map('extract', hostvars[item]) | selectattr('ipv4.address', 'defined') }}
       {% endfor %}
 
+- name: "DEBUG: Print python variables for monitoring"
+  ansible.builtin.debug:
+    msg:
+      - "Monitored Hosts ICMP List Content: {{ monitored_hosts_icmp_list }}"
+      - "Xubuntu Desktop Hostvars: {{ hostvars['xubuntu-desktop'].icmp_targets | default('NOT_DEFINED') }}"
+      - "Router Hostvars: {{ hostvars['router'].icmp_targets | default('NOT_DEFINED') }}"
+
+
 - name: Create a list of targets for icmp monitoring
   set_fact:
     targets_icmp: |
